@@ -6,6 +6,7 @@ import (
 	"log"
 	"math/big"
 	"os"
+	"sort"
 	"strconv"
 )
 
@@ -19,54 +20,80 @@ type Root struct {
 	Value string `json:"value"`
 }
 
+func mustAtoi(s string) int {
+	v, err := strconv.Atoi(s)
+	if err != nil {
+		log.Fatalf("invalid base %q: %v", s, err)
+	}
+	return v
+}
+
 func main() {
 	if len(os.Args) < 2 {
 		log.Fatalf("Usage: go run main.go <json_file>")
 	}
 	filename := os.Args[1]
 
-	file, err := os.Open(filename)
+	f, err := os.Open(filename)
 	if err != nil {
-		log.Fatalf("Failed to open JSON file: %v", err)
+		log.Fatalf("failed to open %s: %v", filename, err)
 	}
-	defer file.Close()
+	defer f.Close()
 
-	var data map[string]json.RawMessage
-	if err := json.NewDecoder(file).Decode(&data); err != nil {
-		log.Fatalf("Failed to parse JSON: %v", err)
+	var raw map[string]json.RawMessage
+	if err := json.NewDecoder(f).Decode(&raw); err != nil {
+		log.Fatalf("failed to parse JSON: %v", err)
 	}
 
 	var keys Keys
-	if err := json.Unmarshal(data["keys"], &keys); err != nil {
-		log.Fatalf("Failed to parse keys: %v", err)
+	if err := json.Unmarshal(raw["keys"], &keys); err != nil {
+		log.Fatalf("failed to parse keys: %v", err)
+	}
+	if keys.K < 2 {
+		log.Fatalf("k must be >= 2")
 	}
 
+	m := keys.K - 1
 	roots := []*big.Int{}
 
-	// Collect first k-1 roots (for quadratic, k=3 → 2 roots)
-	for i := 1; i <= keys.N && len(roots) < keys.K-1; i++ {
-		key := strconv.Itoa(i)
-		if raw, ok := data[key]; ok {
-			var r Root
-			if err := json.Unmarshal(raw, &r); err != nil {
-				log.Fatalf("Failed to parse root %d: %v", i, err)
-			}
-			base, _ := strconv.Atoi(r.Base)
-
-			// Convert string in given base to big.Int
-			val, success := new(big.Int).SetString(r.Value, base)
-			if !success {
-				log.Fatalf("Invalid value %s for base %d", r.Value, base)
-			}
-			roots = append(roots, val)
+	idxs := make([]int, 0, keys.N)
+	for i := 1; i <= keys.N; i++ {
+		if _, ok := raw[strconv.Itoa(i)]; ok {
+			idxs = append(idxs, i)
 		}
 	}
+	sort.Ints(idxs)
 
-	if len(roots) < 2 {
-		log.Fatalf("Not enough roots to compute quadratic")
+	for _, i := range idxs {
+		if len(roots) >= m {
+			break
+		}
+		var r Root
+		if err := json.Unmarshal(raw[strconv.Itoa(i)], &r); err != nil {
+			log.Fatalf("failed to parse root %d: %v", i, err)
+		}
+		base := mustAtoi(r.Base)
+		if base < 2 || base > 62 {
+			log.Fatalf("base %d out of range [2,62]", base)
+		}
+		val, ok := new(big.Int).SetString(r.Value, base)
+		if !ok {
+			log.Fatalf("invalid value %q for base %d at index %d", r.Value, base, i)
+		}
+		roots = append(roots, val)
 	}
 
-	// c = r1 * r2
-	c := new(big.Int).Mul(roots[0], roots[1])
-	fmt.Println("c =", c)
+	if len(roots) < m {
+		log.Fatalf("not enough roots: need %d, got %d", m, len(roots))
+	}
+
+	prod := big.NewInt(1)
+	for _, r := range roots {
+		prod.Mul(prod, r)
+	}
+	if m%2 == 1 {
+		prod.Neg(prod)
+	}
+
+	fmt.Println("c =", prod.String())
 }
